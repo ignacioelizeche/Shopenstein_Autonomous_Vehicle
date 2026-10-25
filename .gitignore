@@ -1,0 +1,35 @@
+# Build artifacts
+build/
+*.elf
+*.bin
+*.hex
+*.map
+
+# LaTeX auxiliaries
+*.aux
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.fls
+*.fdb_latexmk
+*.synctex.gz
+*.bbl
+*.blg
+*.nav
+*.snm
+*.vrb
+
+# PDF (generated, not tracked)
+*.pdf
+
+# OS junk
+.DS_Store
+Thumbs.db
+
+# Arduino CLI build cache
+/robot_master/build/
+/esp32_wifi_bridge/build/
+/test_motores/build/
+/test_wifi_ap/build/
