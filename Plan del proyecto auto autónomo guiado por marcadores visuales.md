@@ -18,7 +18,8 @@ Wio Terminal + Grove Vision AI V2 + driver de motores + chasis 2WD. Documento de
 - Estimación aproximada de ángulo (bearing) y distancia a cada marcador.
 - Navegación reactiva: buscar, acercarse, ejecutar la acción asociada y continuar.
 - Frenado ante obstáculos con el detector de distancia.
-- Pantalla del Wio como interfaz de depuración (ID visto, estado, distancia estimada).
+- Pantalla del Wio como interfaz de depuración y de ruta (grafo de nodos con posición actual y siguiente, ruta planificada, flecha de dirección, ID visto, estado, distancia estimada).
+- Ruta más corta entre nodos (Dijkstra) con orden óptimo de los objetivos (TSP), calculada en el ESP32 y dibujada en la LCD y en el dashboard web.
 
 **No incluye (a menos que sobre tiempo)**
 
@@ -154,6 +155,10 @@ Una tabla en el código asocia cada marcador a una acción:
 | 4 (cruz amarilla) | 20 cm | Detenerse (fin) | — |
 
 Los valores son ejemplos. La ruta es la secuencia de la última columna, y se puede cambiar editando la tabla, sin tocar el piso.
+
+**Estado actual (implementado):** la ruta ya no está fija en el código. El recorrido se modela como un grafo de 5 nodos (A–E, entrada en A y salida en E, definido en `robot_master/GraphData.h`) y el usuario elige los nodos objetivo desde el celular. El ESP32 calcula el camino más corto entre aristas (Dijkstra) y el orden óptimo de visita (TSP) en `esp32_wifi_bridge/graph.cpp` + `router.cpp`, y le entrega al Wio un salto adyacente por vez (`REQ:NEXT` → `NODE:X` + `PATH:...`). El Wio dibuja la flecha de dirección, el nodo siguiente y la ruta completa en amarillo, y al llegar actualiza su nodo actual. El protocolo completo y las reglas están en `AGENTS.md`.
+
+**Pendiente:** la llegada todavía se detecta con cualquier marcador cercano, no con el marcador propio de cada nodo; falta una tabla marcador → nodo cuando el modelo tenga una clase por marcador. Tampoco hay giro automático hacia el siguiente nodo: tras cada llegada el auto espera un nuevo `INICIAR AUTÓNOMO`.
 
 ### 6.2 Máquina de estados
 

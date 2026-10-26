@@ -16,7 +16,7 @@ flowchart TD
     end
 
     subgraph Cerebro ["Controlador Maestro"]
-        WIO["Seeed Wio Terminal (ATSAMD51)<br/>- Pantalla LCD<br/>- FSM y Logica de Navegacion"]
+        WIO["Seeed Wio Terminal (ATSAMD51)<br/>- Pantalla LCD (grafo de nodos)<br/>- FSM y Logica de Navegacion"]
     end
 
     subgraph Vision ["Sensor de Vision Artificial"]
@@ -24,7 +24,7 @@ flowchart TD
     end
 
     subgraph Comunicaciones ["Coprocesador Wi-Fi"]
-        ESP["Seeed XIAO ESP32-C3<br/>- Access Point 'Robot-Autonomo'<br/>- Dashboard Web & Joystick"]
+        ESP["Seeed XIAO ESP32-C3<br/>- Access Point 'Robot-Autonomo'<br/>- Dashboard Web, Joystick, Ruta<br/>- Medidor de latencia Wi-Fi / UART"]
     end
 
     subgraph Potencia ["Etapa de Potencia y Traccion"]
@@ -171,8 +171,8 @@ flowchart LR
 | :---: | :---: | :---: | :--- |
 | **Pin 2 o Pin 4** | `5V` (VBUS USB) | **VUSB** | Alimentación del ESP32 desde el Wio |
 | **Pin 6, 9 o 14** | `GND` | **GND** | Tierra común de referencia |
-| **Pin 10** | `BCM15` (RX de `Serial1`) | **D6 (TX)** | Recibe órdenes del celular (`JOY:x,y`, `CMD:AUTO`) |
-| **Pin 8** | `BCM14` (TX de `Serial1`) | **D7 (RX)** | Envía telemetría de visión (`TLM:id,score,dist...`) |
+| **Pin 10** | `BCM15` (RX de `Serial1`) | **D6 (TX)** | Recibe órdenes del celular (`JOY:x,y`, `CMD:AUTO`), el salto calculado (`NODE:X`, `PATH:...`) y la posición (`SET:X`) |
+| **Pin 8** | `BCM14` (TX de `Serial1`) | **D7 (RX)** | Envía telemetría de visión (`TLM:id,score,dist...`), posición y dirección (`POS:actual,siguiente,dir`) y pide el siguiente salto (`REQ:NEXT`) |
 
 ---
 
