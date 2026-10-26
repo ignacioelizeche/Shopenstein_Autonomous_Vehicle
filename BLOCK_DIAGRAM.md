@@ -13,17 +13,18 @@ flowchart LR
     subgraph UI ["1. Interfaz de Usuario"]
         PHONE["Smartphone (Navegador Web)
         ------------------------
-        IN: Estado, Radar, Telemetria
-        OUT: Toques de Joystick y Botones"]
+        IN: Estado, Radar, Telemetria, Ruta optima
+        OUT: Joystick, Botones, Nodos objetivo"]
     end
 
     subgraph COMM ["2. Modulo de Comunicaciones"]
         ESP["Seeed XIAO ESP32-C3
         ------------------------
         IN: Wi-Fi HTTP Requests
-            UART Telemetria (TLM)
+            UART Telemetria (TLM, POS, REQ)
         OUT: Servidor Web (Dashboard)
-             UART Comandos (JOY/CMD)"]
+             Ruta minima (Dijkstra + TSP)
+             UART Comandos (JOY/CMD/NODE/PATH/SET)"]
     end
 
     subgraph BRAIN ["3. Controlador Maestro"]
@@ -31,8 +32,8 @@ flowchart LR
         ------------------------
         IN: UART Comandos (desde ESP32)
             I2C Detecciones (desde Camara)
-        OUT: Pantalla LCD (HUD local)
-             UART Telemetria (hacia ESP32)
+        OUT: Pantalla LCD (grafo + ruta + HUD)
+             UART Telemetria y pedido de ruta
              Senales Logicas (PWM y Direccion)"]
     end
 
@@ -73,10 +74,10 @@ flowchart LR
 
 | Módulo | Entradas (Inputs) | Salidas (Outputs) | Función en la Arquitectura |
 | :--- | :--- | :--- | :--- |
-| **Smartphone** | - Página web interactiva<br>- Radar de visión<br>- Telemetría en tiempo real | - Eventos táctiles del usuario (joystick virtual, botones de modo) | Interfaz hombre-máquina (HMI) inalámbrica. |
-| **Seeed XIAO ESP32-C3** | - Peticiones HTTP del navegador<br>- Tramas de telemetría UART (`TLM:...`) | - Página web (HTML5/CSS/JS)<br>- Respuestas JSON (`/telemetry`)<br>- Comandos UART (`JOY:x,y`, `CMD:AUTO`) | Coprocesador de comunicaciones inalámbricas (Wi-Fi AP a 2.4 GHz). |
+| **Smartphone** | - Página web interactiva<br>- Radar de visión<br>- Telemetría en tiempo real<br>- Indicador de latencia (Wi-Fi y enlace UART)<br>- Ruta óptima (camino, siguiente nodo, objetivos y costo) | - Eventos táctiles del usuario (joystick virtual, botones de modo, nodos A–E como objetivos, fijar posición) | Interfaz hombre-máquina (HMI) inalámbrica. |
+| **Seeed XIAO ESP32-C3** | - Peticiones HTTP del navegador (`/drive`, `/cmd`, `/route`)<br>- Tramas UART del Wio (`TLM:...`, `POS:...`, `REQ:NEXT`) | - Página web (HTML5/CSS/JS)<br>- Respuestas JSON (`/telemetry`, con `age`, `next`, `path`, `targets`, `cost`, `dir`)<br>- Ruta mínima calculada (Dijkstra + TSP) salto por salto<br>- Comandos UART (`JOY:x,y`, `CMD:AUTO`, `NODE:X`, `PATH:...`, `SET:X`) | Coprocesador de comunicaciones inalámbricas (Wi-Fi AP a 2.4 GHz) y **motor de rutas** del robot. |
 | **Grove Vision AI V2** | - Luz ambiental / fotones (lente OV5647 CSI)<br>- Comandos AT de inferencia por I2C (`AT+INVOKE`) | - Metadatos de inferencia por I2C (cajas delimitadoras `x, y, w, h`, `ID` de clase, confianza `score`) | Periférico inteligente de visión artificial embebida (acelerador NPU/DSP). |
-| **Seeed Wio Terminal** | - Comandos seriales desde ESP32 (`Serial1`)<br>- Paquetes de detección SSCMA por I2C (`Wire`) | - Renderizado gráfico en pantalla TFT LCD integrada<br>- Telemetría periódica hacia ESP32<br>- Señales de control de motor: PWM (`D0, D1`) y dirección (`BCM4, BCM17, BCM5, BCM6`) | **Controlador maestro (Cerebro):** coordina la FSM, mezcla de tracción con trim y toma de decisiones. |
+| **Seeed Wio Terminal** | - Comandos seriales desde ESP32 (`Serial1`)<br>- Saltos y ruta calculada (`NODE:`, `PATH:`)<br>- Paquetes de detección SSCMA por I2C (`Wire`)<br>- Botones KEY_A / 5-way (llegada manual a nodo) | - Pantalla TFT LCD: grafo de nodos, ruta en amarillo, flecha de dirección, FROM/TO y telemetría<br>- Telemetría, posición + dirección en el grafo y pedido de siguiente salto hacia ESP32<br>- Señales de control de motor: PWM (`D0, D1`) y dirección (`BCM4, BCM17, BCM5, BCM6`) | **Controlador maestro (Cerebro):** coordina la FSM, mezcla de tracción con trim y toma de decisiones. |
 | **Driver TB6612FNG** | - Señales de control lógico (3.3V) desde el Wio<br>- Potencia pura de 6V DC desde las 4 pilas AA (`VM`) | - Corriente y voltaje conmutados por modulación PWM y puente H | Etapa de amplificación y control de potencia motriz. |
 | **Motores TT 2WD** | - Voltaje aplicado a las terminales | - Velocidad angular (RPM) y par de tracción en las ruedas | Actuadores físicos del robot móvil. |
 
@@ -98,8 +99,15 @@ flowchart LR
 4. La cámara detecta la presencia del marcador en la escena y devuelve las coordenadas y tamaño de la caja delimitadora (`w` y `h`).
 5. El algoritmo calcula la distancia estimada en tiempo real:
    $$d \approx \frac{f \cdot W}{w}$$
-6. **Condición de Parada:** Cuando el ancho de la caja supera el umbral de proximidad ($w \ge 75 \text{ px}$ o $d \le 25 \text{ cm}$):
+6. **Condición de Parada:** Cuando el ancho de la caja supera el umbral de proximidad ($w \ge 115 \text{ px}$ o $d \le 24 \text{ cm}$):
    - El Wio corta la señal PWM inmediatamente a 0 (frenado en seco).
    - Transiciona al estado `LLEGADA A MARCADOR!`.
    - Muestra el ID y confirmación en la pantalla LCD integrada.
    - Envía el estado `LLEGADA` por serial al ESP32 para que el celular lo muestre en rojo de misión cumplida.
+
+### C. Ruta por Nodos (Grafo A–E)
+1. El usuario arma la ruta en el celular tocando los nodos A–E en la tarjeta **RUTA ÓPTIMA POR NODOS** (`/route?add=X`). Con **📍 Fijar posición** indica en qué nodo está el auto (`/route?pos=X` → UART `SET:X`).
+2. El ESP32-C3 ejecuta el motor de rutas (`graph.cpp` + `router.cpp`): Dijkstra sobre las aristas y orden óptimo de los objetivos (TSP), cerrando siempre en la salida E. Devuelve una secuencia de nodos **adyacentes**.
+3. Mientras no tenga salto, el Wio Terminal pide el siguiente cada 500 ms (`REQ:NEXT`). El ESP32 responde con el próximo nodo del plan (`NODE:X`, o `NODE:-`) y la ruta restante (`PATH:ABDE`, vacío si no hay).
+4. El Wio dibuja en la LCD el grafo con el nodo actual en rojo, el siguiente en verde y la ruta planificada en amarillo, la flecha de dirección (siempre siguiendo una arista) y los nombres FROM/TO; informa su posición y dirección al ESP32 (`POS:actual,siguiente,dir`).
+5. Al llegar (parada autónoma por marcador cercano, o KEY_A / 5-way a mano) el nodo siguiente pasa a ser el actual, suena un beep, se replantea la ruta desde ahí y se vuelve al paso 3. El dashboard muestra en vivo nodo actual, siguiente, camino restante, objetivos pedidos y costo, además del indicador de latencia Wi-Fi/UART.

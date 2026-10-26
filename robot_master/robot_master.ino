@@ -14,6 +14,8 @@
 #include <Wire.h>
 #include <Seeed_Arduino_SSCMA.h>
 #include <TFT_eSPI.h>
+#include <string.h>
+#include "GraphUI.h"
 
 // --- PINES DE MOTORES (TB6612FNG) ---
 const int PIN_PWMA = D0;    // Pin 13 (Motor A - Izquierdo)
@@ -26,7 +28,7 @@ const int PIN_BIN2 = BCM6;  // Pin 31
 
 // --- CALIBRACIÓN DE RECTA (TRIM) ---
 const float TRIM_MOTOR_A = 1.00; // Motor Izquierdo
-const float TRIM_MOTOR_B = 0.74; // Motor Derecho compensado
+const float TRIM_MOTOR_B = 0.90; // Motor Derecho compensado
 
 // --- OBJETOS GLOBALES ---
 SSCMA AI;
@@ -60,6 +62,50 @@ const int VELOCIDAD_BASE = 140;      // PWM base de avance
 
 unsigned long lastTlmSend = 0;
 unsigned long lastDisplayUpdate = 0;
+
+// --- RUTA POR NODOS ---
+// El Wio pide el siguiente nodo al ESP32 (REQ:NEXT) y este responde con lo que
+// eligió el usuario en el celular (NODE:X, o NODE:- si todavía no hay).
+UiNode nodoActual = NODE_A;          // El auto arranca en la entrada (A)
+UiNode nodoSiguiente = NODE_A;
+bool hayNodoSiguiente = false;
+bool rutaCambio = true;              // Redibujar grafo y flecha en la próxima actualización
+unsigned long lastRouteReq = 0;
+const unsigned long INTERVALO_PEDIDO_RUTA = 500;
+
+// Ruta completa calculada por el ESP32 (ej. "ABDE"): se dibuja en amarillo en
+// el minimapa. El Wio no calcula rutas, solo ejecuta un salto por vez.
+char rutaPath[40] = "";
+
+bool letraANodo(char c, UiNode &out) {
+    if (c < 'A' || c >= 'A' + NODE_COUNT) return false;
+    out = (UiNode)(c - 'A');
+    return true;
+}
+
+// POS:actual,siguiente,dir  (siguiente = '-' si no hay; dir = índice de
+// UiDirection según el mapa, para que el dashboard no duplique coordenadas).
+void enviarPosicion() {
+    Serial1.print("POS:");
+    Serial1.print(kNodes[nodoActual].letter);
+    Serial1.print(",");
+    Serial1.print(hayNodoSiguiente ? kNodes[nodoSiguiente].letter : '-');
+    Serial1.print(",");
+    Serial1.print(hayNodoSiguiente ? (int)dirBetween(nodoActual, nodoSiguiente) : (int)DIR_NONE);
+    Serial1.println();
+}
+
+// El auto llegó al nodo destino: pasa a ser el actual y se pide el siguiente.
+void llegarANodo() {
+    if (!hayNodoSiguiente) return;
+    nodoActual = nodoSiguiente;
+    hayNodoSiguiente = false;
+    rutaPath[0] = '\0';  // el ESP32 manda la ruta nueva junto con NODE:
+    rutaCambio = true;
+    lastRouteReq = 0;    // Pedir el siguiente de inmediato
+    enviarPosicion();
+    uiBeep();
+}
 
 // --- CONTROL DE MOTORES ---
 void pararMotores() {
@@ -157,43 +203,30 @@ void controlarJoystick(int x, int y) {
 }
 
 // --- ACTUALIZACIÓN DE PANTALLA LCD ---
+// Grafo, flecha y FROM/TO solo se redibujan cuando cambian los nodos; la
+// barra de estado y la telemetría se refrescan siempre.
 void actualizarPantalla() {
-    tft.fillRect(0, 45, 320, 195, TFT_BLACK);
+    if (rutaCambio) {
+        rutaCambio = false;
+        uiShowRoute(nodoActual, nodoSiguiente, hayNodoSiguiente, rutaPath);
+    }
 
-    tft.setTextSize(2);
+    UiTelemetry t;
     if (estadoActual == ESTADO_AUTONOMO_AVANZANDO) {
-        tft.setTextColor(TFT_GREEN, TFT_BLACK);
-        tft.drawString("MODO: AUTONOMO", 10, 50);
+        t.estado = "MODO: AUTONOMO";
+        t.estadoColor = TFT_GREEN;
     } else if (estadoActual == ESTADO_AUTONOMO_LLEGADA) {
-        tft.setTextColor(TFT_RED, TFT_BLACK);
-        tft.drawString("META ALCANZADA!", 10, 50);
+        t.estado = "META ALCANZADA!";
+        t.estadoColor = TFT_RED;
     } else {
-        tft.setTextColor(TFT_CYAN, TFT_BLACK);
-        tft.drawString(estadoTexto, 10, 50);
+        t.estado = estadoTexto.c_str();
+        t.estadoColor = TFT_CYAN;
     }
-
-    tft.setTextSize(2);
-    tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    
-    char buff[40];
-    snprintf(buff, sizeof(buff), "ID Visto:  %s", (lastScore > 0 ? String(lastTargetID).c_str() : "Ninguno"));
-    tft.drawString(buff, 10, 85);
-
-    snprintf(buff, sizeof(buff), "Score:     %d %%", lastScore);
-    tft.drawString(buff, 10, 115);
-
-    snprintf(buff, sizeof(buff), "Caja:      %dx%d px", lastBoxW, lastBoxH);
-    tft.drawString(buff, 10, 145);
-
-    if (estDistCm > 0) {
-        snprintf(buff, sizeof(buff), "Dist Est:  ~%d cm", estDistCm);
-    } else {
-        snprintf(buff, sizeof(buff), "Dist Est:  -- cm");
-    }
-    tft.drawString(buff, 10, 175);
-
-    snprintf(buff, sizeof(buff), "Inferencia: %d ms", lastInferMs);
-    tft.drawString(buff, 10, 205);
+    t.targetID = lastTargetID;
+    t.score = lastScore;
+    t.distCm = estDistCm;
+    t.inferMs = lastInferMs;
+    uiShowTelemetry(t);
 }
 
 void setup() {
@@ -210,6 +243,7 @@ void setup() {
 
     tft.begin();
     tft.setRotation(3);
+    uiBegin();
     tft.fillScreen(TFT_BLACK);
     tft.setTextColor(TFT_CYAN, TFT_BLACK);
     tft.setTextSize(2);
@@ -237,6 +271,7 @@ void setup() {
 
     delay(1500);
     actualizarPantalla();
+    enviarPosicion();
 }
 
 void procesarComandosSerial() {
@@ -264,6 +299,49 @@ void procesarComandosSerial() {
                 moverAdelante(VELOCIDAD_BASE);
             }
             actualizarPantalla();
+        } else if (line.startsWith("NODE:")) {
+            // Respuesta a REQ:NEXT. "NODE:-" = no hay más saltos.
+            // Solo se aceptan vecinos directos: la ruta nunca cruza el plano.
+            UiNode n;
+            if (!hayNodoSiguiente && line.length() > 5 &&
+                letraANodo(line.charAt(5), n) && n != nodoActual &&
+                esArista(nodoActual, n)) {
+                nodoSiguiente = n;
+                hayNodoSiguiente = true;
+                rutaCambio = true;
+                enviarPosicion();
+            }
+        } else if (line.startsWith("PATH:")) {
+            // Ruta completa calculada por el ESP32 (ej. "ABDE"). Se valida
+            // letra por letra antes de dibujarla.
+            String p = line.substring(5);
+            p.trim();
+            bool ok = p.length() > 0 && p.length() < (int)sizeof(rutaPath);
+            for (uint8_t i = 0; ok && i < p.length(); i++) {
+                char c = p.charAt(i);
+                if (c < 'A' || c >= 'A' + NODE_COUNT) ok = false;
+            }
+            if (ok) {
+                if (strcmp(rutaPath, p.c_str()) != 0) {
+                    p.toCharArray(rutaPath, sizeof(rutaPath));
+                    rutaCambio = true;
+                }
+            } else if (p.length() == 0) {
+                rutaPath[0] = '\0';
+                rutaCambio = true;
+            }
+        } else if (line.startsWith("SET:")) {
+            // El usuario corrige desde el celular en qué nodo está el auto.
+            UiNode n;
+            if (line.length() > 4 && letraANodo(line.charAt(4), n)) {
+                nodoActual = n;
+                // El usuario dice "estoy acá": se descarta el salto en curso y
+                // el ESP32 replantea la ruta desde este nodo.
+                hayNodoSiguiente = false;
+                rutaPath[0] = '\0';
+                rutaCambio = true;
+                enviarPosicion();
+            }
         }
     }
 }
@@ -305,6 +383,7 @@ void loop() {
                 pararMotores();
                 estadoActual = ESTADO_AUTONOMO_LLEGADA;
                 estadoTexto = "LLEGADA A META!";
+                llegarANodo();
                 actualizarPantalla();
             } else {
                 // Centrado en marcha: mantener el objetivo en el centro óptico (x ~ 120)
@@ -339,6 +418,19 @@ void loop() {
         Serial1.print(lastInferMs); Serial1.print(",");
         Serial1.print(estDistCm); Serial1.print(",");
         Serial1.println(estadoTexto);
+        enviarPosicion(); // Mantiene al ESP32 sincronizado aunque se reinicie
+    }
+
+    // Pedir al ESP32 el siguiente nodo mientras no haya uno
+    if (!hayNodoSiguiente && millis() - lastRouteReq > INTERVALO_PEDIDO_RUTA) {
+        lastRouteReq = millis();
+        Serial1.println("REQ:NEXT");
+    }
+
+    // KEY_A o el 5-way presionado: marcar a mano la llegada al nodo siguiente
+    // (modo joystick o pruebas sin cámara)
+    if (uiPollButtons() & (BTN_KEY_A | BTN_PRESS)) {
+        llegarANodo();
     }
 
     if (millis() - lastDisplayUpdate > 400) {
